@@ -1,0 +1,177 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════════
+#  FCG Platform — Docker Compose unificado
+#  Serviços: PostgreSQL · RabbitMQ · UsersAPI · CatalogAPI · PaymentsAPI · NotificationsAPI
+# ═══════════════════════════════════════════════════════════════════
+
+x-rabbitmq-healthcheck: &rabbitmq-healthcheck
+  test: ["CMD", "rabbitmq-diagnostics", "ping"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-postgres-healthcheck: &postgres-healthcheck
+  test: ["CMD-SHELL", "pg_isready -U fcg_app -d fcg"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-common-env: &common-env
+  Jwt__Secret: "fcg-super-secret-key-change-in-production-min32chars!"
+  Jwt__Issuer: "fcg-users-api"
+  Jwt__Audience: "fcg-platform"
+  RabbitMQ__Host: rabbitmq
+  RabbitMQ__VirtualHost: /
+  RabbitMQ__Username: guest
+  RabbitMQ__Password: guest
+
+services:
+  # ──────────────────────────────────────────────────────────────────
+  #  Infraestrutura
+  # ──────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: fcg-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: fcg
+      POSTGRES_USER: fcg_app
+      POSTGRES_PASSWORD: fcg_app_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      <<: *postgres-healthcheck
+    networks:
+      - fcg-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: fcg-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # Management UI: http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      <<: *rabbitmq-healthcheck
+    networks:
+      - fcg-net
+
+  # ──────────────────────────────────────────────────────────────────
+  #  Microsserviços
+  # ──────────────────────────────────────────────────────────────────
+  users-api:
+    build:
+      context: ../fcg-users-api
+      dockerfile: Dockerfile
+    container_name: fcg-users-api
+    ports:
+      - "8081:8080"     # Swagger: http://localhost:8081/swagger
+    environment:
+      <<: *common-env
+      ASPNETCORE_ENVIRONMENT: Docker
+      ConnectionStrings__Postgres: "Host=postgres;Database=fcg;Username=fcg_app;Password=fcg_app_dev"
+      SeedAdmin__Email: "admin@fcg.com"
+      SeedAdmin__Senha: "TrocarEm@2026"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - fcg-net
+
+  catalog-api:
+    build:
+      context: ../fcg-catalog-api
+      dockerfile: Dockerfile
+    container_name: fcg-catalog-api
+    ports:
+      - "8082:8080"     # Swagger: http://localhost:8082/swagger
+    environment:
+      <<: *common-env
+      ASPNETCORE_ENVIRONMENT: Docker
+      ConnectionStrings__Postgres: "Host=postgres;Database=fcg;Username=fcg_app;Password=fcg_app_dev"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - fcg-net
+
+  payments-api:
+    build:
+      context: ../fcg-payments-api
+      dockerfile: Dockerfile
+    container_name: fcg-payments-api
+    ports:
+      - "8083:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__VirtualHost: /
+      RabbitMQ__Username: guest
+      RabbitMQ__Password: guest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - fcg-net
+
+  notifications-api:
+    build:
+      context: ../fcg-notifications-api
+      dockerfile: Dockerfile
+    container_name: fcg-notifications-api
+    ports:
+      - "8084:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__VirtualHost: /
+      RabbitMQ__Username: guest
+      RabbitMQ__Password: guest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - fcg-net
+
+# ──────────────────────────────────────────────────────────────────
+networks:
+  fcg-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  rabbitmq-data:
