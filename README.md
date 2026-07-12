@@ -10,14 +10,14 @@ Contém o `docker-compose.yml` unificado e todos os manifests Kubernetes consoli
                     ┌─────────────────────────────────────────────┐
                     │               FCG Platform                  │
                     │                                             │
-  Cliente HTTP ────►│  :8081 UsersAPI  ─── publica ──►           │
+  Cliente HTTP ────►│  :8081 UsersAPI  ─── publica ──►            │
                     │                         UserCreatedEvent    │
                     │  :8082 CatalogAPI ─── publica ──►           │
                     │         │               OrderPlacedEvent    │
                     │         │                                   │
                     │         │  ◄── consome ── PaymentProcessed  │
                     │         │                 Event             │
-                    │         │                     ▲            │
+                    │         │                     ▲             │
                     │     :8083 PaymentsAPI ─────────┘            │
                     │         (consome OrderPlaced, publica       │
                     │          PaymentProcessed)                  │
@@ -28,7 +28,7 @@ Contém o `docker-compose.yml` unificado e todos os manifests Kubernetes consoli
                     │                                             │
                     │  PostgreSQL (schemas: identidade · loja     │
                     │              biblioteca)                    │
-                    │  RabbitMQ  :5672 (AMQP) :15672 (Mgmt UI)   │
+                    │  RabbitMQ  :5672 (AMQP) :15672 (Mgmt UI)    │
                     └─────────────────────────────────────────────┘
 ```
 
@@ -111,3 +111,10 @@ kubectl get pods -n fcg
 | `fcg-payments-api`     | Processamento de pagamentos (event-driven)    |
 | `fcg-notifications-api`| Notificações por e-mail (simulado)            |
 | `fcg-orchestration`    | Este repositório — compose + k8s              |
+
+## Grupo 17 — Pos-Tech FIAP
+- Letícia Lopes Ribeiro Vasconcelos
+- Lucas Monte Ferreri Castilho
+- Marcelo Henrique Cornelis Rei
+- Rafael Ribeiro Arantes
+- Vinícius Calixto Real
