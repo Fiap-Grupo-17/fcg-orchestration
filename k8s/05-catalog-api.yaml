@@ -29,7 +29,7 @@ spec:
       containers:
         - name: catalog-api
           image: fcg-catalog-api:latest
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:

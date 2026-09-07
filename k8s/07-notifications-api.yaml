@@ -27,7 +27,7 @@ spec:
       containers:
         - name: notifications-api
           image: fcg-notifications-api:latest
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:
