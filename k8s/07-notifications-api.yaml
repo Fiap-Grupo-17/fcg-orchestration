@@ -8,6 +8,7 @@ data:
   RabbitMQ__Host: "rabbitmq-service"
   RabbitMQ__VirtualHost: "/"
   RabbitMQ__Username: "guest"
+  Mongo__Database: "fcg_notifications"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -39,6 +40,11 @@ spec:
                 secretKeyRef:
                   name: platform-secrets
                   key: RABBITMQ_PASSWORD
+            - name: Mongo__ConnectionString
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: Mongo__ConnectionString
           livenessProbe:
             httpGet:
               path: /health
