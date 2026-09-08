@@ -4,7 +4,7 @@ metadata:
   name: catalog-api-config
   namespace: fcg
 data:
-  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_ENVIRONMENT: "Docker"
   Jwt__Issuer: "fcg-users-api"
   Jwt__Audience: "fcg-platform"
   RabbitMQ__Host: "rabbitmq-service"
