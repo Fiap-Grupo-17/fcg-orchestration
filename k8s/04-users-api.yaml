@@ -4,7 +4,7 @@ metadata:
   name: users-api-config
   namespace: fcg
 data:
-  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_ENVIRONMENT: "Docker"
   Jwt__Issuer: "fcg-users-api"
   Jwt__Audience: "fcg-platform"
   Jwt__ExpiresInMinutes: "60"
@@ -31,7 +31,7 @@ spec:
       containers:
         - name: users-api
           image: fcg-users-api:latest
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent 
           ports:
             - containerPort: 8080
           envFrom:
