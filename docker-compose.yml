@@ -2,7 +2,8 @@ version: "3.9"
 
 # ═══════════════════════════════════════════════════════════════════
 #  FCG Platform — Docker Compose unificado
-#  Serviços: PostgreSQL · RabbitMQ · UsersAPI · CatalogAPI · PaymentsAPI · NotificationsAPI
+#  Serviços: PostgreSQL · RabbitMQ · Redis · MongoDB ·
+#            UsersAPI · CatalogAPI · PaymentsAPI · NotificationsAPI
 # ═══════════════════════════════════════════════════════════════════
 
 x-rabbitmq-healthcheck: &rabbitmq-healthcheck
@@ -13,6 +14,12 @@ x-rabbitmq-healthcheck: &rabbitmq-healthcheck
 
 x-postgres-healthcheck: &postgres-healthcheck
   test: ["CMD-SHELL", "pg_isready -U fcg_app -d fcg"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-mongo-healthcheck: &mongo-healthcheck
+  test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
   interval: 10s
   timeout: 5s
   retries: 5
@@ -62,6 +69,32 @@ services:
     networks:
       - fcg-net
 
+  redis:
+    image: redis:7-alpine
+    container_name: fcg-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - fcg-net
+
+  mongo:
+    image: mongo:7
+    container_name: fcg-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      <<: *mongo-healthcheck
+    networks:
+      - fcg-net
+
   # ──────────────────────────────────────────────────────────────────
   #  Microsserviços
   # ──────────────────────────────────────────────────────────────────
@@ -103,10 +136,17 @@ services:
       <<: *common-env
       ASPNETCORE_ENVIRONMENT: Docker
       ConnectionStrings__Postgres: "Host=postgres;Database=fcg;Username=fcg_app;Password=fcg_app_dev"
+      Redis__ConnectionString: "redis:6379"
+      Mongo__ConnectionString: "mongodb://mongo:27017"
+      Mongo__Database: "fcg_catalog"
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -130,8 +170,12 @@ services:
       RabbitMQ__VirtualHost: /
       RabbitMQ__Username: guest
       RabbitMQ__Password: guest
+      Mongo__ConnectionString: "mongodb://mongo:27017"
+      Mongo__Database: "fcg_payments"
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -155,8 +199,12 @@ services:
       RabbitMQ__VirtualHost: /
       RabbitMQ__Username: guest
       RabbitMQ__Password: guest
+      Mongo__ConnectionString: "mongodb://mongo:27017"
+      Mongo__Database: "fcg_notifications"
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -198,3 +246,4 @@ networks:
 volumes:
   pgdata:
   rabbitmq-data:
+  mongodata:
