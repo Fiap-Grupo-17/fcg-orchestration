@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: kong
+  namespace: fcg
+
+spec:
+
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: kong
+
+  template:
+
+    metadata:
+      labels:
+        app: kong
+
+    spec:
+
+      containers:
+
+        - name: kong
+
+          image: kong:3.4
+
+          ports:
+
+            - name: proxy
+              containerPort: 8000
+
+            - name: admin
+              containerPort: 8001
+
+          env:
+
+            - name: KONG_DATABASE
+              value: postgres
+
+            - name: KONG_PG_HOST
+              value: kong-database-service
+
+            - name: KONG_PG_PORT
+              value: "5432"
+
+            - name: KONG_PG_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_DB
+
+            - name: KONG_PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_USER
+
+            - name: KONG_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_PASSWORD
+
+            - name: KONG_PROXY_LISTEN
+              value: "0.0.0.0:8000"
+
+            - name: KONG_ADMIN_LISTEN
+              value: "0.0.0.0:8001"
+
+            - name: KONG_LOG_LEVEL
+              value: info
+
+            - name: KONG_PROXY_ACCESS_LOG
+              value: /dev/stdout
+
+            - name: KONG_PROXY_ERROR_LOG
+              value: /dev/stderr
+
+            - name: KONG_ADMIN_ACCESS_LOG
+              value: /dev/stdout
+
+            - name: KONG_ADMIN_ERROR_LOG
+              value: /dev/stderr
+
+          readinessProbe:
+
+            httpGet:
+              path: /status
+              port: 8001
+
+            initialDelaySeconds: 20
+            periodSeconds: 10
+
+          livenessProbe:
+
+            httpGet:
+              path: /status
+              port: 8001
+
+            initialDelaySeconds: 30
+            periodSeconds: 30
+
+---
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: kong-admin-service
+  namespace: fcg
+
+spec:
+
+  selector:
+    app: kong
+
+  ports:
+
+    - name: admin
+      port: 8001
+      targetPort: 8001
+
+  type: ClusterIP
+
+---
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: kong-proxy-service
+  namespace: fcg
+
+spec:
+
+  selector:
+    app: kong
+
+  ports:
+
+    - name: proxy
+      port: 80
+      targetPort: 8000
+      nodePort: 30080
+
+  type: NodePort

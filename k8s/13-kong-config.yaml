@@ -1,0 +1,236 @@
+apiVersion: batch/v1
+kind: Job
+
+metadata:
+  name: kong-config
+  namespace: fcg
+
+spec:
+
+  backoffLimit: 10
+
+  template:
+
+    metadata:
+      labels:
+        app: kong-config
+
+    spec:
+
+      restartPolicy: OnFailure
+
+      containers:
+
+        - name: kong-config
+
+          image: curlimages/curl:latest
+
+          env:
+
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: Jwt__Secret
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+
+              echo "========================================="
+              echo "Aguardando Kong ficar disponivel..."
+              echo "========================================="
+
+              until curl -s http://kong-admin-service:8001/status > /dev/null;
+              do
+                echo "Kong ainda nao disponivel..."
+                sleep 5
+              done
+
+              echo "Kong disponivel."
+              echo ""
+
+
+              # =====================================================
+              # USERS API
+              # =====================================================
+
+              echo "Criando Service da UsersAPI..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services \
+                --data name=users-api \
+                --data url=http://users-api-service:80
+
+
+              # -----------------------------------------------------
+              # ROTA PUBLICA - AUTENTICACAO
+              # -----------------------------------------------------
+
+              echo "Criando rota publica de autenticacao..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services/users-api/routes \
+                --data name=auth-route \
+                --data paths[]=/api/auth \
+                --data strip_path=false
+
+
+              # -----------------------------------------------------
+              # ROTA PROTEGIDA - USUARIOS
+              # -----------------------------------------------------
+
+              echo "Criando rota protegida da UsersAPI..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services/users-api/routes \
+                --data name=users-route \
+                --data paths[]=/api/usuarios \
+                --data strip_path=false
+
+
+              # =====================================================
+              # CATALOG API
+              # =====================================================
+
+              echo "Criando Service da CatalogAPI..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services \
+                --data name=catalog-api \
+                --data url=http://catalog-api-service:80
+
+
+              # -----------------------------------------------------
+              # GET /api/jogos
+              # PUBLICO
+              # -----------------------------------------------------
+
+              echo "Criando rota publica GET /api/jogos..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services/catalog-api/routes \
+                --data name=catalog-jogos-get-route \
+                --data paths[]=/api/jogos \
+                --data methods[]=GET \
+                --data strip_path=false
+
+
+              # -----------------------------------------------------
+              # POST /api/jogos
+              # PROTEGIDO
+              # -----------------------------------------------------
+
+              echo "Criando rota protegida POST /api/jogos..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services/catalog-api/routes \
+                --data name=catalog-jogos-post-route \
+                --data paths[]=/api/jogos \
+                --data methods[]=POST \
+                --data strip_path=false
+
+
+              # -----------------------------------------------------
+              # POST /api/biblioteca/aquisicoes
+              # PROTEGIDO JWT
+              # -----------------------------------------------------
+
+              echo "Criando rota de aquisicoes..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services/catalog-api/routes \
+                --data name=catalog-aquisicoes-route \
+                --data paths[]=/api/biblioteca/aquisicoes \
+                --data methods[]=POST \
+                --data strip_path=false
+
+
+              # -----------------------------------------------------
+              # GET /api/biblioteca
+              # PROTEGIDO JWT
+              # -----------------------------------------------------
+
+              echo "Criando rota da biblioteca..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services/catalog-api/routes \
+                --data name=catalog-biblioteca-route \
+                --data paths[]=/api/biblioteca \
+                --data methods[]=GET \
+                --data strip_path=false
+
+
+              # =====================================================
+              # CONSUMER JWT
+              # =====================================================
+
+              echo "Criando Consumer..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/consumers \
+                --data username=fcg-user
+
+
+              # =====================================================
+              # CREDENCIAL JWT
+              # =====================================================
+
+              echo "Criando credencial JWT..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/consumers/fcg-user/jwt \
+                --data key=fcg-users-api \
+                --data algorithm=HS256 \
+                --data secret="$JWT_SECRET"
+
+
+              # =====================================================
+              # JWT - USERS API
+              # =====================================================
+
+              echo "Aplicando JWT na rota de usuarios..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/routes/users-route/plugins \
+                --data name=jwt
+
+
+              # =====================================================
+              # JWT - CATALOG - POST /api/jogos
+              # =====================================================
+
+              echo "Aplicando JWT no POST /api/jogos..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/routes/catalog-jogos-post-route/plugins \
+                --data name=jwt
+
+
+              # =====================================================
+              # JWT - CATALOG - AQUISICOES
+              # =====================================================
+
+              echo "Aplicando JWT em /api/biblioteca/aquisicoes..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/routes/catalog-aquisicoes-route/plugins \
+                --data name=jwt
+
+
+              # =====================================================
+              # JWT - CATALOG - BIBLIOTECA
+              # =====================================================
+
+              echo "Aplicando JWT em /api/biblioteca..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/routes/catalog-biblioteca-route/plugins \
+                --data name=jwt
+
+
+              echo ""
+              echo "========================================="
+              echo "Configuracao do Kong concluida."
+              echo "========================================="

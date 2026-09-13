@@ -167,6 +167,110 @@ kubectl port-forward svc/grafana 3000:3000 -n fcg
 4. **Atualize** `image:` nos arquivos `04` a `07` com o caminho do registry
 5. Considere usar **Kubernetes Secrets** gerenciados (Vault, AWS Secrets Manager)
 
+## API Gateway — Kong no Kubernetes
+
+A plataforma utiliza o **Kong Gateway** como ponto de entrada para as APIs no ambiente Kubernetes.
+Os manifests foram separados para manter a implantação organizada:
+
+- `k8s/10-kong-postgres.yaml` — banco PostgreSQL utilizado pelo Kong.
+- `k8s/11-kong-migrations.yaml` — migrations/bootstrap do banco do Kong.
+- `k8s/12-kong.yaml` — Deployment e Services do Kong.
+- `k8s/13-kong-config.yaml` — configuração dos Services e Routes do gateway.
+
+### Subir o Kong
+
+```bash
+kubectl apply -f k8s/10-kong-postgres.yaml
+kubectl apply -f k8s/11-kong-migrations.yaml
+kubectl get jobs -n fcg
+kubectl apply -f k8s/12-kong.yaml
+kubectl apply -f k8s/13-kong-config.yaml
+
+# Conferir o ambiente
+kubectl get pods -n fcg
+kubectl get svc -n fcg
+```
+
+O resultado esperado é ter `kong`, `kong-database`, `users-api` e `catalog-api` em `Running` (o Job `kong-migrations` fica como `Completed`).
+
+### Portas usadas no Kubernetes local
+
+| Componente | Acesso | Finalidade |
+|---|---|---|
+| Kong Proxy | `http://localhost:30080` | Entrada das requisições que devem passar pelo API Gateway |
+| UsersAPI | `http://localhost:30081` | NodePort direto da UsersAPI |
+| CatalogAPI | `http://localhost:30082` | NodePort direto da CatalogAPI |
+| Kong Admin API | porta `8001` via `port-forward` | Administração e conferência de Services/Routes |
+
+> Para validar o funcionamento do **API Gateway**, utilize a porta **30080**. As portas 30081 e 30082 acessam diretamente as APIs e, portanto, não demonstram a passagem pelo Kong.
+
+### Swagger das APIs no Kubernetes
+
+Acesso direto aos Swagger para autenticação e testes:
+
+```text
+UsersAPI:   http://localhost:30081/swagger/index.html
+CatalogAPI: http://localhost:30082/swagger/index.html
+```
+
+Na UsersAPI é possível autenticar o usuário administrador, obter o JWT pelo endpoint de autenticação e utilizar **Authorize / Bearer Token** para testar endpoints protegidos.
+
+### Testar as APIs através do Kong
+
+Exemplos pelo proxy do Kong:
+
+```bash
+# UsersAPI — endpoint protegido
+curl -i -H "Authorization: Bearer SEU_TOKEN_JWT" http://localhost:30080/api/usuarios
+
+# CatalogAPI
+curl -i http://localhost:30080/api/jogos
+```
+
+Quando a requisição passa pelo Kong, a resposta pode apresentar cabeçalhos como:
+
+```text
+Via: kong/3.4.2
+X-Kong-Proxy-Latency: ...
+X-Kong-Upstream-Latency: ...
+```
+
+Esses cabeçalhos ajudam a demonstrar o fluxo **Cliente → Kong → Service Kubernetes → API**. Um erro retornado pela própria API (por exemplo, HTTP 500) ainda pode ter passado corretamente pelo Kong; nesse caso, os cabeçalhos do gateway ajudam a separar erro de roteamento de erro interno da aplicação.
+
+### Administração do Kong
+
+A Admin API é interna (`ClusterIP`). Para acessá-la localmente, use uma porta livre no computador:
+
+```bash
+kubectl port-forward -n fcg svc/kong-admin-service 18001:8001
+```
+
+Em outro terminal:
+
+```bash
+curl http://localhost:18001/services
+curl http://localhost:18001/routes
+```
+
+Isso permite conferir se os Services `users-api` e `catalog-api` e suas respectivas Routes foram carregados no Kong. Se a porta local `8001` já estiver ocupada, mantenha `18001:8001` para evitar conflito.
+
+### Fluxo simplificado
+
+```text
+Swagger / Postman / curl
+          |
+          | http://localhost:30080
+          v
+      Kong Gateway
+          |
+          +----> users-api-service:80   ----> UsersAPI
+          |
+          +----> catalog-api-service:80 ----> CatalogAPI
+                         |
+                         v
+                     PostgreSQL
+```
+
 
 ## Observabilidade
 

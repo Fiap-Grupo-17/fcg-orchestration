@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+
+metadata:
+  name: kong-migrations
+  namespace: fcg
+
+spec:
+
+  backoffLimit: 10
+
+  template:
+
+    metadata:
+      labels:
+        app: kong-migrations
+
+    spec:
+
+      restartPolicy: OnFailure
+
+      containers:
+
+        - name: kong-migrations
+
+          image: kong:3.4
+
+          command:
+            - kong
+            - migrations
+            - bootstrap
+
+          env:
+
+            - name: KONG_DATABASE
+              value: postgres
+
+            - name: KONG_PG_HOST
+              value: kong-database-service
+
+            - name: KONG_PG_PORT
+              value: "5432"
+
+            - name: KONG_PG_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_DB
+
+            - name: KONG_PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_USER
+
+            - name: KONG_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_PASSWORD
