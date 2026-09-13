@@ -9,6 +9,49 @@ spec:
     requests:
       storage: 2Gi
 ---
+# Ponte de topologia para a Function serverless (fcg-notifications-function).
+# O MassTransit publica em exchanges por tipo; a Function consome de filas nomeadas.
+# Este ConfigMap carrega vhost + usuário + filas + bindings NO BOOT (load_definitions),
+# sem passo manual (curl/pwsh).
+#
+# IMPORTANTE (validado ao vivo): o load_definitions exige que o vhost "/" e o usuário
+# estejam NO PRÓPRIO arquivo de definitions ("Please create virtual host / prior to
+# importing definitions"), por isso incluímos users/vhosts/permissions aqui. O usuário
+# é guest/guest (password_hash sha256), alinhado ao RABBITMQ_PASSWORD=guest do
+# platform-secrets usado pelas APIs. Com um rabbitmq.conf custom montado, as variáveis
+# RABBITMQ_DEFAULT_* do container são ignoradas — o usuário vem das definitions.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-bridge
+  namespace: fcg
+data:
+  rabbitmq.conf: |
+    load_definitions = /etc/rabbitmq/definitions.json
+  definitions.json: |
+    {
+      "rabbit_version": "3.13.0",
+      "users": [
+        { "name": "guest", "password_hash": "kI3GCrswBLNZQzHJJ95QLoyfAVooYhnvf7jbqiW9BjOYUloe", "hashing_algorithm": "rabbit_password_hashing_sha256", "tags": ["administrator"] }
+      ],
+      "vhosts": [ { "name": "/" } ],
+      "permissions": [
+        { "user": "guest", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" }
+      ],
+      "exchanges": [
+        { "name": "FCG.Contracts.Events:UserCreatedEvent", "vhost": "/", "type": "fanout", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+        { "name": "FCG.Contracts.Events:PaymentProcessedEvent", "vhost": "/", "type": "fanout", "durable": true, "auto_delete": false, "internal": false, "arguments": {} }
+      ],
+      "queues": [
+        { "name": "notifications-user-created", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} },
+        { "name": "notifications-payment-processed", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} }
+      ],
+      "bindings": [
+        { "source": "FCG.Contracts.Events:UserCreatedEvent", "vhost": "/", "destination": "notifications-user-created", "destination_type": "queue", "routing_key": "", "arguments": {} },
+        { "source": "FCG.Contracts.Events:PaymentProcessedEvent", "vhost": "/", "destination": "notifications-payment-processed", "destination_type": "queue", "routing_key": "", "arguments": {} }
+      ]
+    }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,17 +73,17 @@ spec:
           ports:
             - containerPort: 5672
             - containerPort: 15672
-          env:
-            - name: RABBITMQ_DEFAULT_USER
-              value: guest
-            - name: RABBITMQ_DEFAULT_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: platform-secrets
-                  key: RABBITMQ_PASSWORD
           volumeMounts:
             - name: rabbitmq-data
               mountPath: /var/lib/rabbitmq
+            # subPath: monta só estes arquivos, sem sombrear /etc/rabbitmq/enabled_plugins
+            # (o plugin de management vem do enabled_plugins da imagem -management).
+            - name: rabbitmq-bridge
+              mountPath: /etc/rabbitmq/rabbitmq.conf
+              subPath: rabbitmq.conf
+            - name: rabbitmq-bridge
+              mountPath: /etc/rabbitmq/definitions.json
+              subPath: definitions.json
           resources:
             requests:
               memory: "128Mi"
@@ -54,10 +97,14 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 10
+            failureThreshold: 6
       volumes:
         - name: rabbitmq-data
           persistentVolumeClaim:
             claimName: rabbitmq-pvc
+        - name: rabbitmq-bridge
+          configMap:
+            name: rabbitmq-bridge
 ---
 apiVersion: v1
 kind: Service

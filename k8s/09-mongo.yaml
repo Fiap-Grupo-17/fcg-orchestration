@@ -19,6 +19,10 @@ metadata:
     tier: database
 spec:
   replicas: 1
+  # Recreate: com volume RWO, o RollingUpdate deixa o pod novo Pending esperando o antigo
+  # soltar o PVC → deadlock. Recreate derruba o antigo antes de subir o novo.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mongo
@@ -36,16 +40,22 @@ spec:
           volumeMounts:
             - name: mongo-data
               mountPath: /data/db
+          # tcpSocket em vez de mongosh: o mongosh no cold start estoura o timeout padrão de 1s
+          # da probe exec e o liveness mata o mongo em loop. O tcpSocket só checa a porta 27017.
           readinessProbe:
-            exec:
-              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            tcpSocket:
+              port: 27017
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           livenessProbe:
-            exec:
-              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-            initialDelaySeconds: 20
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 30
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests:
               memory: "128Mi"
