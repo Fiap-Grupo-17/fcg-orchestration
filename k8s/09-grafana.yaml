@@ -1,3 +1,33 @@
+# Grafana + provisionamento automatico (datasource Prometheus + dashboard das APIs).
+# Sobe pronto: sem configurar datasource nem importar dashboard na mao.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: fcg
+data:
+  datasources.yaml: "apiVersion: 1\ndatasources:\n  - name: Prometheus\n    type: prometheus\n    uid: prometheus\n    access: proxy\n    url: http://prometheus:9090\n    isDefault: true\n    editable: true\n"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: fcg
+data:
+  dashboards.yaml: "apiVersion: 1\nproviders:\n  - name: fcg\n    orgId: 1\n    folder: ''\n    type: file\n    disableDeletion: false\n    allowUiUpdates: true\n    updateIntervalSeconds: 10\n    options:\n      path: /var/lib/grafana/dashboards\n"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: fcg
+data:
+  fcg-apis.json: "{\n  \"uid\": \"fcg-apis\",\n  \"title\": \"FCG - Observabilidade das APIs\",\n  \"schemaVersion\": 39,\n  \"version\": 1,\n  \"editable\": true,\n  \"refresh\": \"5s\",\n  \"time\": {\n    \"from\": \"now-15m\",\n    \"to\": \"now\"\n  },\n  \"tags\": [\n    \"fcg\",\n    \"tc3\"\n  ],\n  \"panels\": [\n    {\n      \"id\": 1,\n      \"type\": \"timeseries\",\n      \"title\": \"Requisicoes/s por status (todas as APIs)\",\n      \"gridPos\": {\n        \"h\": 8,\n        \"w\": 12,\n        \"x\": 0,\n        \"y\": 0\n      },\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"reqps\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"table\",\n          \"placement\": \"bottom\"\n        }\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n         \
+    \ \"expr\": \"sum by (code) (rate(http_requests_received_total[1m]))\",\n          \"legendFormat\": \"{{code}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"prometheus\"\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 2,\n      \"type\": \"timeseries\",\n      \"title\": \"Requisicoes/s por servico\",\n      \"gridPos\": {\n        \"h\": 8,\n        \"w\": 12,\n        \"x\": 12,\n        \"y\": 0\n      },\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"reqps\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"table\",\n          \"placement\": \"bottom\"\n        }\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (job) (rate(http_requests_received_total[1m]))\",\n \
+    \         \"legendFormat\": \"{{job}}\",\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"prometheus\"\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 3,\n      \"type\": \"timeseries\",\n      \"title\": \"Latencia p95 (s) por servico\",\n      \"gridPos\": {\n        \"h\": 8,\n        \"w\": 12,\n        \"x\": 0,\n        \"y\": 8\n      },\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"s\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"table\",\n          \"placement\": \"bottom\"\n        }\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket[5m])))\",\n          \"legendFormat\": \"{{job}}\"\
+    ,\n          \"datasource\": {\n            \"type\": \"prometheus\",\n            \"uid\": \"prometheus\"\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 4,\n      \"type\": \"timeseries\",\n      \"title\": \"Taxa de erros 5xx (req/s) por servico\",\n      \"gridPos\": {\n        \"h\": 8,\n        \"w\": 12,\n        \"x\": 12,\n        \"y\": 8\n      },\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"reqps\"\n        },\n        \"overrides\": []\n      },\n      \"options\": {\n        \"legend\": {\n          \"displayMode\": \"table\",\n          \"placement\": \"bottom\"\n        }\n      },\n      \"targets\": [\n        {\n          \"refId\": \"A\",\n          \"expr\": \"sum by (job) (rate(http_requests_received_total{code=~\\\"5..\\\"}[1m]))\",\n          \"legendFormat\": \"{{job}}\",\n          \"datasource\": {\n            \"\
+    type\": \"prometheus\",\n            \"uid\": \"prometheus\"\n          }\n        }\n      ]\n    }\n  ]\n}"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,13 +44,30 @@ spec:
         app: grafana
     spec:
       containers:
-        - name: grafana
-          image: grafana/grafana:latest
-          ports:
-            - containerPort: 3000
-          env:
-            - name: GF_SECURITY_ADMIN_PASSWORD
-              value: "admin1234"
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: admin1234
+        volumeMounts:
+        - name: grafana-datasources
+          mountPath: /etc/grafana/provisioning/datasources
+        - name: grafana-dashboard-provider
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: grafana-dashboards
+          mountPath: /var/lib/grafana/dashboards
+      volumes:
+      - name: grafana-datasources
+        configMap:
+          name: grafana-datasources
+      - name: grafana-dashboard-provider
+        configMap:
+          name: grafana-dashboard-provider
+      - name: grafana-dashboards
+        configMap:
+          name: grafana-dashboards
 ---
 apiVersion: v1
 kind: Service
@@ -32,6 +79,6 @@ spec:
   selector:
     app: grafana
   ports:
-    - port: 3000
-      targetPort: 3000
-      nodePort: 30300
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30300
