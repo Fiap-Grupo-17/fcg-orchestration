@@ -328,4 +328,5 @@ kubectl port-forward svc/grafana 3000:3000 -n fcg
 ## Grupo 17 — Pos-Tech FIAP
 - Letícia Lopes Ribeiro Vasconcelos
 - Marcelo Henrique Cornelis Rei
-- Vinícius Calixto Real
+- Washington Santana dos Santos
+- Raul Hentz Rodrigues
