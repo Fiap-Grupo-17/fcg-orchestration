@@ -21,6 +21,41 @@ spec:
 
     spec:
 
+      # Espera o schema do Kong ser migrado (Job kong-migrations) ANTES de iniciar o Kong.
+      # Sem isso o container do Kong sobe, não acha o schema e entra em CrashLoop/restart até
+      # a migração terminar — o que pode derrubar port-forwards. Com o initContainer, o pod só
+      # fica Ready quando o Kong realmente sobe (0 restarts), mantendo os forwards estáveis.
+      initContainers:
+
+        - name: wait-migrations
+          image: kong:3.4
+          command:
+            - /bin/sh
+            - -c
+            - until kong migrations list >/dev/null 2>&1; do echo "aguardando migrations do Kong..."; sleep 3; done; echo "migrations ok"
+          env:
+            - name: KONG_DATABASE
+              value: postgres
+            - name: KONG_PG_HOST
+              value: kong-database-service
+            - name: KONG_PG_PORT
+              value: "5432"
+            - name: KONG_PG_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_DB
+            - name: KONG_PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_USER
+            - name: KONG_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: KONG_POSTGRES_PASSWORD
+
       containers:
 
         - name: kong
@@ -34,6 +69,9 @@ spec:
 
             - name: admin
               containerPort: 8001
+
+            - name: manager
+              containerPort: 8002
 
           env:
 
@@ -69,6 +107,14 @@ spec:
 
             - name: KONG_ADMIN_LISTEN
               value: "0.0.0.0:8001"
+
+            # Kong Manager (GUI OSS, porta 8002): informar as URLs que o NAVEGADOR usa
+            # (via port-forward para localhost) habilita a GUI e o CORS do Admin API.
+            - name: KONG_ADMIN_GUI_URL
+              value: "http://localhost:8002"
+
+            - name: KONG_ADMIN_GUI_API_URL
+              value: "http://localhost:8001"
 
             - name: KONG_LOG_LEVEL
               value: info

@@ -139,15 +139,22 @@ kubectl get pods -n fcg
 # 3. Acessar serviços
 # Em clusters criados via kind (como o do Docker Desktop mais recente), o NodePort
 # não fica acessível diretamente em localhost. Use kubectl port-forward:
-kubectl port-forward svc/users-api-service 8081:80 -n fcg
-kubectl port-forward svc/catalog-api-service 8082:80 -n fcg
-kubectl port-forward svc/prometheus 9090:9090 -n fcg
-kubectl port-forward svc/grafana 3000:3000 -n fcg
+kubectl port-forward -n fcg svc/rabbitmq-service 5672:5672 &
+kubectl port-forward -n fcg svc/mongo-service    27017:27017 &
+kubectl port-forward -n fcg svc/redis-service 6379:6379 &
+kubectl port-forward -n fcg svc/grafana    3000:3000 &
+kubectl port-forward -n fcg svc/prometheus 9090:9090 &
+kubectl port-forward -n fcg svc/kong-proxy-service 8000:80 &
+kubectl port-forward -n fcg svc/kong-admin-service 8001:8001 &
+kubectl port-forward -n fcg deploy/kong 8002:8002 &
+kubectl port-forward -n fcg svc/users-api-service   8081:80 &
+kubectl port-forward -n fcg svc/catalog-api-service 8082:80 &
 
 # UsersAPI:   http://localhost:8081/swagger
 # CatalogAPI: http://localhost:8082/swagger
 # Prometheus: http://localhost:9090
 # Grafana:    http://localhost:3000 (admin/admin1234)
+# Kong:       http://localhost:8002/
 
 > Os arquivos `08-redis.yaml` e `09-mongo.yaml` mantêm a numeração alta (após as
 > APIs) por terem sido adicionados posteriormente à convenção original de
@@ -202,7 +209,7 @@ O resultado esperado é ter `kong`, `kong-database`, `users-api` e `catalog-api`
 | CatalogAPI | `http://localhost:30082` | NodePort direto da CatalogAPI |
 | Kong Admin API | porta `8001` via `port-forward` | Administração e conferência de Services/Routes |
 
-> Para validar o funcionamento do **API Gateway**, utilize a porta **30080**. As portas 30081 e 30082 acessam diretamente as APIs e, portanto, não demonstram a passagem pelo Kong.
+> Para validar o funcionamento do **API Gateway**, utilize a porta **8000**. As portas 30081 e 30082 acessam diretamente as APIs e, portanto, não demonstram a passagem pelo Kong.
 
 ### Swagger das APIs no Kubernetes
 
@@ -316,14 +323,20 @@ kubectl port-forward svc/grafana 3000:3000 -n fcg
 
 ## Repositórios
 
-| Repositório            | Descrição                                     |
-|------------------------|-----------------------------------------------|
-| `fcg-contracts`        | NuGet de contratos de eventos compartilhados  |
-| `fcg-users-api`        | Autenticação, cadastro, JWT                   |
-| `fcg-catalog-api`      | Catálogo de jogos + Biblioteca                |
-| `fcg-payments-api`     | Processamento de pagamentos (event-driven)    |
-| `fcg-notifications-api`| Notificações por e-mail (simulado)            |
+| Repositório                 | Descrição                                     |
+|------------------------     |-----------------------------------------------|
+| `fcg-contracts`             | NuGet de contratos de eventos compartilhados  |
+| `fcg-users-api`             | Autenticação, cadastro, JWT                   |
+| `fcg-catalog-api`           | Catálogo de jogos + Biblioteca                |
+| `fcg-payments-api`          | Processamento de pagamentos (event-driven)    |
+| `fcg-notifications-api`.    | Notificações por e-mail (simulado)            |
+| `fcg-notifications-function`| Notificações por e-mail SERVERLESS (simulado)            |
 | `fcg-orchestration`    | Este repositório — compose + k8s              |
+
+
+## Para material de apoio, leia e siga o passo a passo dos documentos abaixo:
+- ordem_execucao_comandos.md | Ordem exata dos comandos para subir o ambiente COMPLETO
+- ROTEIRO_TESTE_E2E_HIBRIDO.md | Roteiro para subida de ambiente e usabilidade da aplicação 
 
 ## Grupo 17 — Pos-Tech FIAP
 - Letícia Lopes Ribeiro Vasconcelos
