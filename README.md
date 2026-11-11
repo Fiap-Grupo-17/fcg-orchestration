@@ -92,7 +92,7 @@ docker compose ps
 — 
 | Prometheus        | 9090        | http://localhost:9090                |
 — 
-| Grafana           | 3000        | http://localhost:3000 (admin/admin1234) |
+| Grafana           | 3000        | http://localhost:3000 (admin/<GRAFANA_ADMIN_PASSWORD>) |
 
 ### Validar Redis e MongoDB
 
@@ -105,6 +105,26 @@ mongosh mongodb://localhost:27017 --eval "db.getSiblingDB('fcg_catalog').getColl
 mongosh mongodb://localhost:27017 --eval "db.getSiblingDB('fcg_payments').getCollectionNames()"
 mongosh mongodb://localhost:27017 --eval "db.getSiblingDB('fcg_notifications').getCollectionNames()"
 ```
+## Segredos
+
+O repositório é público, então **nenhuma credencial é versionada**. O arquivo real
+`k8s/03-secrets.yaml` está no `.gitignore`, e o repositório traz apenas o modelo
+`k8s/03-secrets.example.yaml` com placeholders.
+
+**Ambiente local (kind):**
+
+```
+Copy-Item k8s\03-secrets.example.yaml k8s\03-secrets.yaml
+# edite k8s/03-secrets.yaml e troque cada <placeholder> por um valor seu
+kubectl apply -f k8s/03-secrets.yaml
+```
+
+> Se o Postgres local já foi criado com outra senha, mantenha o seu arquivo atual:
+> o Postgres só lê a senha na primeira criação do banco.
+
+**AKS:** os valores de produção são aleatórios, criados fora do Git e injetados
+no cluster em tempo de execução (GitHub Secrets / `kubectl create secret`).
+Nenhum valor de produção aparece neste repositório.
 
 ## Deploy no Kubernetes
 
@@ -153,7 +173,7 @@ kubectl port-forward -n fcg svc/catalog-api-service 8082:80 &
 # UsersAPI:   http://localhost:8081/swagger
 # CatalogAPI: http://localhost:8082/swagger
 # Prometheus: http://localhost:9090
-# Grafana:    http://localhost:3000 (admin/admin1234)
+# Grafana:    http://localhost:3000 (admin/<GRAFANA_ADMIN_PASSWORD>)
 # Kong:       http://localhost:8002/
 
 > Os arquivos `08-redis.yaml` e `09-mongo.yaml` mantêm a numeração alta (após as
@@ -319,7 +339,7 @@ kubectl port-forward svc/grafana 3000:3000 -n fcg
 
 - Prometheus: http://localhost:9090 (verificar em Status > Targets se `users-api` e
   `catalog-api` aparecem como UP)
-- Grafana: http://localhost:3000 — usuário `admin`, senha `admin1234`
+- Grafana: http://localhost:3000 — usuário `admin`, senha `<GRAFANA_ADMIN_PASSWORD>`
 
 ## Repositórios
 

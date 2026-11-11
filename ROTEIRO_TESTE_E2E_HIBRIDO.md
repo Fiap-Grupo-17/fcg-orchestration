@@ -390,7 +390,7 @@ kubectl port-forward -n fcg svc/prometheus 9090:9090 &
 - **Prometheus** — http://localhost:9090 → **Status → Target health**: `users-api` e `catalog-api`
   devem estar **UP** (verde). Se aparecerem **DOWN com 404** em `/metrics`, a imagem está velha →
   refaça **A.2 / A.3.1** (tag única + `set image`).
-- **Grafana** — http://localhost:3000 (`admin` / `admin1234`) → menu **Dashboards** →
+- **Grafana** — http://localhost:3000 (`admin` / `<GRAFANA_ADMIN_PASSWORD>`) → menu **Dashboards** →
   **"FCG - Observabilidade das APIs"** (ou direto em http://localhost:3000/d/fcg-apis).
   O datasource Prometheus e o dashboard **já sobem provisionados** pelo manifesto `09-grafana.yaml`
   — nada para configurar/importar na mão.

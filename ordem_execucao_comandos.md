@@ -162,7 +162,7 @@ kubectl exec -n fcg deploy/mongo -- mongosh --quiet fcg_notifications \
 curl -s http://localhost:8082/api/jogos >/dev/null
 kubectl exec -n fcg deploy/redis -- redis-cli KEYS 'catalog:*'
 ```
-- **Grafana:** http://localhost:3000 (`admin`/`admin1234`) → Dashboards → **"FCG - Observabilidade das APIs"** (ou `/d/fcg-apis`). **Não** use Drilldown→Traces.
+- **Grafana:** http://localhost:3000 (`admin`/`<GRAFANA_ADMIN_PASSWORD>`) → Dashboards → **"FCG - Observabilidade das APIs"** (ou `/d/fcg-apis`). **Não** use Drilldown→Traces.
 - **Prometheus:** http://localhost:9090 → Status → Target health → `users-api`/`catalog-api` **UP**.
 
 ## 14) Encerrar
