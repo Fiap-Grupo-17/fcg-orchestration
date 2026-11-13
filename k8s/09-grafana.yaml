@@ -78,10 +78,9 @@ metadata:
   name: grafana
   namespace: fcg
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: grafana
   ports:
-  - port: 3000
+  - port: 80
     targetPort: 3000
-    nodePort: 30300
