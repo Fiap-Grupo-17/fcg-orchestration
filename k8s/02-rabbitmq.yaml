@@ -5,6 +5,7 @@ metadata:
   namespace: fcg
 spec:
   accessModes: [ReadWriteOnce]
+  storageClassName: managed-csi
   resources:
     requests:
       storage: 2Gi

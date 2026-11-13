@@ -19,7 +19,12 @@ metadata:
   name: users-api
   namespace: fcg
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: users-api
@@ -30,8 +35,8 @@ spec:
     spec:
       containers:
         - name: users-api
-          image: fcg-users-api:latest
-          imagePullPolicy: IfNotPresent 
+          image: acrfcgtc4.azurecr.io/fcg-users-api:v1
+          imagePullPolicy: Always 
           ports:
             - containerPort: 8080
           envFrom:
@@ -90,17 +95,3 @@ spec:
     - port: 80
       targetPort: 8080
   type: ClusterIP
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: users-api-nodeport
-  namespace: fcg
-spec:
-  selector:
-    app: users-api
-  ports:
-    - port: 80
-      targetPort: 8080
-      nodePort: 30081
-  type: NodePort

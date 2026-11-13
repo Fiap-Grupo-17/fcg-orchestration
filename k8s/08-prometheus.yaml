@@ -54,10 +54,9 @@ metadata:
   name: prometheus
   namespace: fcg
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app: prometheus
   ports:
     - port: 9090
       targetPort: 9090
-      nodePort: 30090

@@ -27,8 +27,8 @@ spec:
     spec:
       containers:
         - name: payments-api
-          image: fcg-payments-api:latest
-          imagePullPolicy: IfNotPresent
+          image: acrfcgtc4.azurecr.io/fcg-payments-api:v1
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
           envFrom:
