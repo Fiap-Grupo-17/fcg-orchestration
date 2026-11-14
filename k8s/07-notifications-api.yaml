@@ -25,6 +25,7 @@ spec:
       labels:
         app: notifications-api
     spec:
+      serviceAccountName: fcg-sa   # Workload Identity -> Key Vault
       containers:
         - name: notifications-api
           image: acrfcgtc4.azurecr.io/fcg-notifications-api:v1
@@ -64,6 +65,18 @@ spec:
             limits:
               memory: "128Mi"
               cpu: "200m"
+          volumeMounts:
+            - name: kv-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+      # Volume CSI do Key Vault: mantém o Secret platform-secrets sincronizado (ver 03-keyvault-secrets.yaml)
+      volumes:
+        - name: kv-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: fcg-keyvault
 ---
 apiVersion: v1
 kind: Service
