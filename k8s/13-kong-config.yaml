@@ -90,6 +90,24 @@ spec:
                 --data strip_path=false
 
 
+              # -----------------------------------------------------
+              # ROTA PUBLICA - CADASTRO (POST /api/usuarios/registrar)
+              # -----------------------------------------------------
+              # Sem plugin jwt: o auto-cadastro nao pode exigir token.
+              # O Kong escolhe a rota de caminho mais longo, entao este
+              # POST nao cai na users-route (protegida). Apenas o POST
+              # fica aberto; o resto de /api/usuarios segue com JWT.
+
+              echo "Criando rota publica de cadastro..."
+
+              curl -s -X POST \
+                http://kong-admin-service:8001/services/users-api/routes \
+                --data name=users-registrar-route \
+                --data paths[]=/api/usuarios/registrar \
+                --data methods[]=POST \
+                --data strip_path=false
+
+
               # =====================================================
               # CATALOG API
               # =====================================================
