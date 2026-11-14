@@ -22,6 +22,11 @@ metadata:
 spec:
   replicas: 1
 
+  # Recreate: o disco (Azure Disk, ReadWriteOnce) só anexa em 1 pod por vez;
+  # com RollingUpdate o pod novo trava esperando o disco do antigo (Multi-Attach).
+  strategy:
+    type: Recreate
+
   selector:
     matchLabels:
       app: kong-database
@@ -41,6 +46,11 @@ spec:
             - containerPort: 5432
 
           env:
+
+            # Subpasta do volume: no AKS o disco vem com "lost+found" na raiz
+            # e o initdb recusa diretório não vazio.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
 
             - name: POSTGRES_USER
               valueFrom:
