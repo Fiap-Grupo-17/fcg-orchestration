@@ -107,24 +107,50 @@ mongosh mongodb://localhost:27017 --eval "db.getSiblingDB('fcg_notifications').g
 ```
 ## Segredos
 
-O repositório é público, então **nenhuma credencial é versionada**. O arquivo real
-`k8s/03-secrets.yaml` está no `.gitignore`, e o repositório traz apenas o modelo
-`k8s/03-secrets.example.yaml` com placeholders.
+O repositório é público, então **nenhuma credencial é versionada**.
 
-**Ambiente local (kind):**
+### AKS (TC4): Azure Key Vault + CSI Secret Store
+
+As credenciais de produção vivem **só** no Azure Key Vault `kv-fcg-tc4`. O cluster
+as busca em tempo de execução, sem senha nenhuma guardada:
+
+```text
+Key Vault kv-fcg-tc4 ──► driver CSI (addon do AKS) ──► Secret "platform-secrets" ──► Deployments
+        ▲                      │
+        └── identidade id-fcg-kv (Workload Identity, federada com a SA fcg:fcg-sa)
+```
+
+- `k8s/03-keyvault-secrets.yaml` cria a ServiceAccount `fcg-sa` e o
+  `SecretProviderClass` `fcg-keyvault`, que lista os 11 segredos do cofre e, via
+  `secretObjects`, **gera** o Secret `platform-secrets` com as mesmas chaves de
+  sempre (`Jwt__Secret`, `ConnectionStrings__Postgres`…). Os `secretKeyRef` dos
+  Deployments não mudam.
+- As 4 APIs montam o volume CSI em `/mnt/secrets-store`; o Secret existe enquanto
+  ao menos um pod montar o volume.
+- O arquivo só contém identificadores (tenant, client ID da identidade, nome do
+  cofre), que não dão acesso a nada sozinhos.
+- Prova de origem: `kubectl get secret platform-secrets -n fcg --show-labels`
+  mostra `secrets-store.csi.k8s.io/managed=true`.
+- Para trocar um valor: grave uma nova versão no cofre e reinicie os pods que o usam
+  (`kubectl rollout restart deploy/<api> -n fcg`).
+
+### Ambiente local (kind/Docker Desktop)
+
+O modelo com placeholders fica **fora** de `k8s/` (em `exemplos/`), para que um
+`kubectl apply -f k8s/` nunca aplique placeholders por cima do Secret real. O
+arquivo real `k8s/03-secrets.yaml` está no `.gitignore`.
+
+> ⚠️ Nesta branch, `k8s/` está adaptado ao AKS (ACR, `managed-csi`, Key Vault).
+> Fora do Azure o `03-keyvault-secrets.yaml` e o volume CSI das APIs não funcionam.
 
 ```
-Copy-Item k8s\03-secrets.example.yaml k8s\03-secrets.yaml
+Copy-Item exemplos\03-secrets.example.yaml k8s\03-secrets.yaml
 # edite k8s/03-secrets.yaml e troque cada <placeholder> por um valor seu
 kubectl apply -f k8s/03-secrets.yaml
 ```
 
 > Se o Postgres local já foi criado com outra senha, mantenha o seu arquivo atual:
 > o Postgres só lê a senha na primeira criação do banco.
-
-**AKS:** os valores de produção são aleatórios, criados fora do Git e injetados
-no cluster em tempo de execução (GitHub Secrets / `kubectl create secret`).
-Nenhum valor de produção aparece neste repositório.
 
 ## Deploy no Kubernetes
 
