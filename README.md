@@ -63,6 +63,17 @@ PaymentsAPI       ──[PaymentProcessedEvent]───────────
 
 ## Executar localmente (todos os serviços)
 
+Crie o arquivo `.env` com as senhas do ambiente local (ele não é versionado):
+
+```bash
+# PowerShell (Linux/macOS: cp .env.example .env)
+Copy-Item .env.example .env
+# preencha: POSTGRES_PASSWORD, RABBITMQ_PASSWORD, JWT_SECRET (mínimo 32 caracteres),
+# SEED_ADMIN_PASSWORD e GRAFANA_ADMIN_PASSWORD
+```
+
+O `docker compose` recusa subir se alguma variável estiver vazia. O login do admin inicial é `admin@fcg.com` com a senha definida em `SEED_ADMIN_PASSWORD`.
+
 > **Pré-requisito**: imagens Docker de cada serviço construídas ou usar `--build`
 
 ```bash
