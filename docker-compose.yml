@@ -25,13 +25,13 @@ x-mongo-healthcheck: &mongo-healthcheck
   retries: 5
 
 x-common-env: &common-env
-  Jwt__Secret: "fcg-super-secret-key-change-in-production-min32chars!"
+  Jwt__Secret: "${JWT_SECRET:?Defina JWT_SECRET no arquivo .env}"
   Jwt__Issuer: "fcg-users-api"
   Jwt__Audience: "fcg-platform"
   RabbitMQ__Host: rabbitmq
   RabbitMQ__VirtualHost: /
   RabbitMQ__Username: guest
-  RabbitMQ__Password: guest
+  RabbitMQ__Password: "${RABBITMQ_PASSWORD:?Defina RABBITMQ_PASSWORD no arquivo .env}"
 
 services:
   # ──────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ services:
     environment:
       POSTGRES_DB: fcg
       POSTGRES_USER: fcg_app
-      POSTGRES_PASSWORD: fcg_app_dev
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -58,10 +58,10 @@ services:
     container_name: fcg-rabbitmq
     ports:
       - "5672:5672"
-      - "15672:15672"   # Management UI: http://localhost:15672 (guest/guest)
+      - "15672:15672"   # Management UI: http://localhost:15672 
     environment:
       RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?Defina RABBITMQ_PASSWORD no arquivo .env}"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -108,9 +108,9 @@ services:
     environment:
       <<: *common-env
       ASPNETCORE_ENVIRONMENT: Docker
-      ConnectionStrings__Postgres: "Host=postgres;Database=fcg;Username=fcg_app;Password=fcg_app_dev"
+      ConnectionStrings__Postgres: "Host=postgres;Database=fcg;Username=fcg_app;Password=${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}"
       SeedAdmin__Email: "admin@fcg.com"
-      SeedAdmin__Senha: "TrocarEm@2026"
+      SeedAdmin__Senha: "${SEED_ADMIN_PASSWORD:?Defina SEED_ADMIN_PASSWORD no arquivo .env}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,7 +135,7 @@ services:
     environment:
       <<: *common-env
       ASPNETCORE_ENVIRONMENT: Docker
-      ConnectionStrings__Postgres: "Host=postgres;Database=fcg;Username=fcg_app;Password=fcg_app_dev"
+      ConnectionStrings__Postgres: "Host=postgres;Database=fcg;Username=fcg_app;Password=${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}"
       Redis__ConnectionString: "redis:6379"
       Mongo__ConnectionString: "mongodb://mongo:27017"
       Mongo__Database: "fcg_catalog"
@@ -169,7 +169,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__VirtualHost: /
       RabbitMQ__Username: guest
-      RabbitMQ__Password: guest
+      RabbitMQ__Password: "${RABBITMQ_PASSWORD:?Defina RABBITMQ_PASSWORD no arquivo .env}"
       Mongo__ConnectionString: "mongodb://mongo:27017"
       Mongo__Database: "fcg_payments"
     depends_on:
@@ -198,7 +198,7 @@ services:
       RabbitMQ__Host: rabbitmq
       RabbitMQ__VirtualHost: /
       RabbitMQ__Username: guest
-      RabbitMQ__Password: guest
+      RabbitMQ__Password: "${RABBITMQ_PASSWORD:?Defina RABBITMQ_PASSWORD no arquivo .env}"
       Mongo__ConnectionString: "mongodb://mongo:27017"
       Mongo__Database: "fcg_notifications"
     depends_on:
@@ -234,7 +234,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?Defina GRAFANA_ADMIN_PASSWORD no arquivo .env}
     networks:
       - fcg-net
 

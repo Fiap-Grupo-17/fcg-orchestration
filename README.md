@@ -88,7 +88,7 @@ docker compose ps
 | MongoDB           | 27017       | —                                    |
 | Redis             | 6379        | —                                    |
 | RabbitMQ AMQP     | 5672        | —                                    |
-| RabbitMQ Mgmt     | 15672       | http://localhost:15672 (guest/guest) |
+| RabbitMQ Mgmt     | 15672       | http://localhost:15672 (guest/<RABBITMQ_PASSWORD>) |
 — 
 | Prometheus        | 9090        | http://localhost:9090                |
 — 

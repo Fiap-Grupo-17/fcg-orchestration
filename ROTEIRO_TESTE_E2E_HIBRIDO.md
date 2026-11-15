@@ -140,7 +140,7 @@ sobem sem CrashLoop (probes já corrigidas).
 ```bash
 kubectl port-forward -n fcg svc/rabbitmq-service 15672:15672   # deixe rodando neste T1
 # em qualquer terminal:
-curl -s -u guest:guest http://localhost:15672/api/queues/%2F | grep -o 'notifications-[a-z-]*'
+curl -s -u guest:<RABBITMQ_PASSWORD> http://localhost:15672/api/queues/%2F | grep -o 'notifications-[a-z-]*'
 ```
 ✅ Aparecem `notifications-user-created` e `notifications-payment-processed` (carregadas pelo ConfigMap, sem passo manual).
 
@@ -255,7 +255,7 @@ curl -s -X POST http://localhost:8081/api/usuarios/administradores \
   -H "content-type: application/json" \
   -d '{"nome":"Admin Demo","email":"admin@fcg.com","senha":"Senha@123"}'
 
-ou utilize o usuario login já disponível - {"email":"admin@fcg.com","senha":"TrocarEm@2026"}
+ou utilize o usuario login já disponível - {"email":"admin@fcg.com","senha":"<SEED_ADMIN_PASSWORD>"}
 
 # login admin → copie o accessToken
 curl -s -X POST http://localhost:8081/api/auth/login \
@@ -313,7 +313,7 @@ curl -s -o /dev/null -w "POST /api/jogos SEM token -> %{http_code}\n" -X POST ht
 > (erro `Bad token; invalid signature` no Kong). **Capture numa variável:**
 ```bash
 ADMIN=$(curl -s -X POST http://localhost:8000/api/auth/login -H "content-type: application/json" \
-  -d '{"email":"admin@fcg.com","senha":"TrocarEm@2026"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['accessToken'])")
+  -d '{"email":"admin@fcg.com","senha":<SEED_ADMIN_PASSWORD>}' | python3 -c "import sys,json;print(json.load(sys.stdin)['accessToken'])")
 echo "len do token: ${#ADMIN}"   # ~500 = ok
 ```
 > O admin é criado automaticamente (seed) na subida da UsersAPI.

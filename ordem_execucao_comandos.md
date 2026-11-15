@@ -78,7 +78,7 @@ kubectl get pods -n fcg
 ## 7) Conferir a ponte de filas (automática) (T1)
 ```bash
 kubectl port-forward -n fcg svc/rabbitmq-service 15672:15672 &
-curl -s -u guest:guest http://localhost:15672/api/queues/%2F | grep -o 'notifications-[a-z-]*'
+curl -s -u guest:<RABBITMQ_PASSWORD> http://localhost:15672/api/queues/%2F | grep -o 'notifications-[a-z-]*'
 ```
 ✅ `notifications-user-created` e `notifications-payment-processed`.
 
@@ -128,7 +128,7 @@ kubectl port-forward -n fcg svc/prometheus 9090:9090 &
 
 ## 12) Exercitar (T5) — **pelo gateway** (`:8000`) ou direto nas APIs (`:8081/:8082`)
 > Para o item 1 do PDF, use o **gateway** (`http://localhost:8000`). No gateway, o cadastro exige token:
-> logue como admin (`admin@fcg.com` / `TrocarEm@2026`) e cadastre o usuário comum **com o token do admin**.
+> logue como admin (`admin@fcg.com` / `<SEED_ADMIN_PASSWORD>`) e cadastre o usuário comum **com o token do admin**.
 > Detalhe passo a passo do fluxo pelo gateway (GW.1–GW.5): ver `ROTEIRO_TESTE_E2E_HIBRIDO.md` (Parte C-GW).
 - **Cadastro** → boas-vindas no T3:
 ```bash
