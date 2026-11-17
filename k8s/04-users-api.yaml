@@ -36,7 +36,7 @@ spec:
       serviceAccountName: fcg-sa   # Workload Identity -> Key Vault
       containers:
         - name: users-api
-          image: acrfcgtc4.azurecr.io/fcg-users-api:v1
+          image: acrfcgtc4b.azurecr.io/fcg-users-api:v1
           imagePullPolicy: Always 
           ports:
             - containerPort: 8080

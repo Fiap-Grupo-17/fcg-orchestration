@@ -28,7 +28,7 @@ spec:
       serviceAccountName: fcg-sa   # Workload Identity -> Key Vault
       containers:
         - name: notifications-api
-          image: acrfcgtc4.azurecr.io/fcg-notifications-api:v1
+          image: acrfcgtc4b.azurecr.io/fcg-notifications-api:v1
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

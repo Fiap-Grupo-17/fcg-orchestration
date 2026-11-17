@@ -1,0 +1,127 @@
+# 14-elasticsearch.yaml — Busca avançada (item 3 do PDF TC4)
+# Elasticsearch single-node DENTRO do AKS (namespace fcg), só acessível internamente
+# (Service ClusterIP). Quem expõe a busca para a internet é o CatalogAPI, via Kong.
+#
+# Senha do usuário "elastic": vem do Key Vault kv-fcg-tc4b (segredo elastic-password)
+# → Secret platform-secrets, chave ELASTIC_PASSWORD (ver 03-keyvault-secrets.yaml).
+# Nenhum valor sensível neste arquivo.
+#
+# Dimensionamento pensado para os nós Standard_D2as_v4 (2 vCPU / 8 GiB):
+#   heap 512 MB, request 1 GiB / limit 1,5 GiB de memória, 250m-1000m de CPU.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: elasticsearch-pvc
+  namespace: fcg
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elasticsearch
+  namespace: fcg
+  labels:
+    app: elasticsearch
+    tier: search
+spec:
+  replicas: 1
+  # Recreate: volume RWO (mesmo motivo do mongo) — o pod antigo solta o disco antes do novo subir.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+        tier: search
+    spec:
+      # A imagem roda como uid 1000; o disco do Azure nasce com dono root.
+      # fsGroup faz o Kubernetes ajustar o dono do volume → evita AccessDeniedException no /data.
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+          ports:
+            - name: http
+              containerPort: 9200
+          env:
+            - name: discovery.type
+              value: "single-node"
+            - name: cluster.name
+              value: "fcg-search"
+            - name: ES_JAVA_OPTS
+              value: "-Xms512m -Xmx512m"
+            # Segurança ligada (usuário/senha), mas HTTP sem TLS: tráfego só dentro do cluster.
+            - name: xpack.security.enabled
+              value: "true"
+            - name: xpack.security.http.ssl.enabled
+              value: "false"
+            - name: xpack.security.transport.ssl.enabled
+              value: "false"
+            # Dispensa o ajuste vm.max_map_count=262144 no nó (que exigiria container privilegiado).
+            - name: node.store.allow_mmap
+              value: "false"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-secrets
+                  key: ELASTIC_PASSWORD
+          volumeMounts:
+            - name: es-data
+              mountPath: /usr/share/elasticsearch/data
+          # Readiness autenticada: só "pronto" quando o cluster responde (status yellow ou green).
+          # As aspas simples fazem a variável ser lida DENTRO do pod (a senha não aparece no YAML).
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'curl -s -f -u "elastic:${ELASTIC_PASSWORD}" "http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s" > /dev/null'
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          # Liveness simples (porta aberta) e com folga: o Elasticsearch demora para subir.
+          livenessProbe:
+            tcpSocket:
+              port: 9200
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "250m"
+            limits:
+              memory: "1536Mi"
+              cpu: "1000m"
+      volumes:
+        - name: es-data
+          persistentVolumeClaim:
+            claimName: elasticsearch-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-service
+  namespace: fcg
+  labels:
+    app: elasticsearch
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+  type: ClusterIP
