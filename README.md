@@ -1,8 +1,37 @@
 # FCG Orchestration
 
-Repositório de orquestração da plataforma **Fiap Cloud Games (FCG)** — Fase 3.
+Repositório de orquestração da plataforma **Fiap Cloud Games (FCG)** — Fases 3 e 4.
 
-Contém o `docker-compose.yml` unificado e todos os manifests Kubernetes consolidados.
+Contém o `docker-compose.yml` unificado (ambiente local) e todos os manifests Kubernetes
+consolidados (`k8s/`), que hoje rodam em produção no **Azure Kubernetes Service (AKS)**.
+
+## Produção no Azure (TC4)
+
+| Item | Recurso |
+|---|---|
+| Kubernetes gerenciado | AKS `aks-fcg-tc4` (plano Free), 2 nós `Standard_D2as_v4`, região East US, resource group `rg-fcg-tc4` |
+| Registry privado | Azure Container Registry `acrfcgtc4b` (`acrfcgtc4b.azurecr.io`) — o AKS puxa as imagens com identidade gerenciada (AcrPull), sem senha |
+| Segredos | Azure Key Vault `kv-fcg-tc4b` → driver CSI + Workload Identity (ver [Segredos](#segredos)) |
+| Exposição externa | Kong Gateway como Service `LoadBalancer` (Azure Load Balancer). Todo o resto é `ClusterIP` (interno) |
+| CI/CD | GitHub Actions em `fcg-users-api` e `fcg-catalog-api`: build → testes → imagem com tag do commit → scan (Trivy) → push no ACR → Rolling Update no AKS |
+| Busca avançada | Elasticsearch 8.15.3 no AKS (`k8s/14-elasticsearch.yaml`), usado pelo CatalogAPI em `GET /api/jogos/search` |
+| Observabilidade | Prometheus + Grafana (Grafana exposto por `LoadBalancer`) |
+
+Endereços públicos (mudam se o cluster for desligado e religado — `az aks stop/start`):
+
+```bash
+kubectl get svc -n fcg kong-proxy-service grafana     # coluna EXTERNAL-IP
+```
+
+### Mapa das exigências da Fase 4
+
+| Exigência | Onde está |
+|---|---|
+| 1. Cluster gerenciado, registry privado e Load Balancer | AKS + ACR + `k8s/12-kong.yaml` (`kong-proxy-service` tipo `LoadBalancer`) |
+| 2. NoSQL (MongoDB) e Cache (Redis) | `k8s/09-mongo.yaml`, `k8s/08-redis.yaml`; uso no código descrito em [Persistência poliglota](#persistência-poliglota) |
+| 3. Busca avançada com Elasticsearch | `k8s/14-elasticsearch.yaml` + indexação/busca no `fcg-catalog-api` ([Busca avançada](#busca-avançada-elasticsearch)) |
+| 4. CI/CD com Rolling Update | `.github/workflows/ci.yml` dos repos `fcg-users-api` e `fcg-catalog-api` ([CI/CD](#cicd-github-actions--acr--aks)) |
+| 5. Zero hardcoded credentials | `k8s/03-keyvault-secrets.yaml` (Key Vault + CSI) — nenhum valor sensível nos manifests |
 
 ## Arquitetura
 
@@ -10,34 +39,35 @@ Contém o `docker-compose.yml` unificado e todos os manifests Kubernetes consoli
                     ┌─────────────────────────────────────────────┐
                     │               FCG Platform                  │
                     │                                             │
-  Cliente HTTP ────►│  :8081 UsersAPI  ─── publica ──►            │
-                    │                         UserCreatedEvent    │
-                    │  :8082 CatalogAPI ─── publica ──►           │
-                    │         │               OrderPlacedEvent    │
+  Cliente HTTP ────►│  Kong Gateway (JWT) ──► UsersAPI / CatalogAPI│
+                    │                                             │
+                    │  UsersAPI  ─── publica ──► UserCreatedEvent │
+                    │  CatalogAPI ── publica ──► OrderPlacedEvent │
                     │         │                                   │
                     │         │  ◄── consome ── PaymentProcessed  │
                     │         │                 Event             │
                     │         │                     ▲             │
-                    │     :8083 PaymentsAPI ─────────┘            │
+                    │     PaymentsAPI ───────────────┘            │
                     │         (consome OrderPlaced, publica       │
                     │          PaymentProcessed)                  │
                     │                                             │
-                    │     :8084 NotificationsAPI                  │
+                    │     NotificationsAPI                        │
                     │         (consome UserCreated + Payment      │
                     │          Processed — logs e-mail simulado)  │
                     │                                             │
-                    │  PostgreSQL (schemas: identidade · loja     │
-                    │              biblioteca)                    │
-                    │  MongoDB   :27017 (fcg_catalog · fcg_       │
-                    │              payments · fcg_notifications)  │
-                    │  Redis     :6379  (cache-aside do catálogo) │
-                    │  RabbitMQ  :5672 (AMQP) :15672 (Mgmt UI)    │
+                    │  PostgreSQL    (identidade · loja ·         │
+                    │                 biblioteca)                 │
+                    │  MongoDB       (fcg_catalog · fcg_payments ·│
+                    │                 fcg_notifications)          │
+                    │  Redis         (cache-aside do catálogo)    │
+                    │  Elasticsearch (índice "jogos" — busca)     │
+                    │  RabbitMQ      (eventos entre serviços)     │
                     └─────────────────────────────────────────────┘
 ```
 
 ### Persistência poliglota
 
-A plataforma combina três tecnologias de armazenamento, cada uma resolvendo um
+A plataforma combina quatro tecnologias de armazenamento, cada uma resolvendo um
 problema diferente:
 
 - **PostgreSQL (EF Core)** — fonte de verdade transacional do CatalogAPI e UsersAPI
@@ -51,7 +81,28 @@ problema diferente:
 - **Redis** — cache-aside para as consultas mais frequentes do catálogo (listagem e
   detalhe de jogo), evitando reconsultar o Postgres a cada requisição em um endpoint
   de alto tráfego. TTL curto (5–10 min) aceita alguma inconsistência temporária em
-  troca de latência menor e menos carga no banco relacional.
+  troca de latência menor e menos carga no banco relacional. Inserir/editar um jogo
+  invalida as chaves.
+- **Elasticsearch** — motor de busca **independente** do banco relacional, com busca
+  tolerante a erros de digitação e ordenação por relevância (ver abaixo).
+
+## Busca avançada (Elasticsearch)
+
+- **Onde roda:** `k8s/14-elasticsearch.yaml` — Elasticsearch 8.15.3 single-node no AKS, com
+  disco persistente (PVC 5 Gi), autenticação ligada (usuário `elastic`, senha vinda do Key Vault
+  `elastic-password`) e Service `ClusterIP` (não exposto à internet).
+- **Quem usa:** o CatalogAPI, via variáveis `Elasticsearch__Url`, `Elasticsearch__Username`,
+  `Elasticsearch__IndexName` (ConfigMap do `k8s/05-catalog-api.yaml`) e `Elasticsearch__Password`
+  (Secret `platform-secrets`).
+- **Sincronização:** criar/editar jogo → indexa; desativar → remove do índice; reativar → indexa.
+  No startup, o CatalogAPI cria o índice `jogos` (se não existir) e reconcilia com o Postgres.
+- **Endpoint:** `GET /api/jogos/search?q=<termo>` (público, via Kong) — `multi_match` com
+  `fuzziness: AUTO` (pesos título 3, gênero 2, descrição 1), resultados ordenados por `score`.
+  Detalhes no README do `fcg-catalog-api`.
+
+```bash
+curl -s "http://<IP-do-Kong>/api/jogos/search?q=aventrua" | jq '.[] | {titulo, score}'
+```
 
 ## Fluxo de eventos
 
@@ -60,6 +111,205 @@ UsersAPI          ──[UserCreatedEvent]────────────�
 CatalogAPI        ──[OrderPlacedEvent]──────────────────► PaymentsAPI
 PaymentsAPI       ──[PaymentProcessedEvent]─────────────► CatalogAPI + NotificationsAPI
 ```
+
+## Segredos
+
+O repositório é público, então **nenhuma credencial é versionada**.
+
+### AKS (TC4): Azure Key Vault + CSI Secret Store
+
+As credenciais de produção vivem **só** no Azure Key Vault `kv-fcg-tc4b`. O cluster
+as busca em tempo de execução, sem senha nenhuma guardada:
+
+```text
+Key Vault kv-fcg-tc4b ──► driver CSI (addon do AKS) ──► Secret "platform-secrets" ──► Deployments
+        ▲                       │
+        └── identidade id-fcg-kv (Workload Identity, federada com a SA fcg:fcg-sa)
+```
+
+- `k8s/03-keyvault-secrets.yaml` cria a ServiceAccount `fcg-sa` e o
+  `SecretProviderClass` `fcg-keyvault`, que lista os **12 segredos** do cofre e, via
+  `secretObjects`, **gera** o Secret `platform-secrets` com as chaves usadas pelos
+  Deployments (`Jwt__Secret`, `ConnectionStrings__Postgres`, `ELASTIC_PASSWORD`…).
+- Segredos no cofre: `postgres-user`, `postgres-password`, `postgres-conn`, `jwt-secret`,
+  `rabbitmq-password`, `mongo-conn`, `seed-admin-senha`, `kong-postgres-user`,
+  `kong-postgres-password`, `kong-postgres-db`, `grafana-admin-password`, `elastic-password`.
+- As 4 APIs montam o volume CSI em `/mnt/secrets-store`; o Secret existe enquanto
+  ao menos um pod montar o volume.
+- O arquivo só contém identificadores (tenant, client ID da identidade, nome do
+  cofre), que não dão acesso a nada sozinhos.
+- Prova de origem: `kubectl get secret platform-secrets -n fcg --show-labels`
+  mostra `secrets-store.csi.k8s.io/managed=true`.
+- Para trocar um valor: grave uma nova versão no cofre e reinicie os pods que o usam
+  (`kubectl rollout restart deploy/<api> -n fcg`).
+- **Novo segredo:** além de criá-lo no cofre e listá-lo no `03`, é preciso regenerar o
+  Secret (o driver não acrescenta chaves num Secret existente):
+  ```bash
+  kubectl apply -f k8s/03-keyvault-secrets.yaml
+  kubectl delete secret platform-secrets -n fcg
+  kubectl rollout restart deploy/payments-api -n fcg     # um pod que monta o volume recria o Secret
+  ```
+
+### Ambiente local (kind/Docker Desktop)
+
+O modelo com placeholders fica **fora** de `k8s/` (em `exemplos/`), para que um
+`kubectl apply -f k8s/` nunca aplique placeholders por cima do Secret real. O
+arquivo real `k8s/03-secrets.yaml` está no `.gitignore`.
+
+> ⚠️ `k8s/` está adaptado ao AKS (ACR, `managed-csi`, Key Vault).
+> Fora do Azure o `03-keyvault-secrets.yaml` e o volume CSI das APIs não funcionam.
+
+```
+Copy-Item exemplos\03-secrets.example.yaml k8s\03-secrets.yaml
+# edite k8s/03-secrets.yaml e troque cada <placeholder> por um valor seu
+kubectl apply -f k8s/03-secrets.yaml
+```
+
+> Se o Postgres local já foi criado com outra senha, mantenha o seu arquivo atual:
+> o Postgres só lê a senha na primeira criação do banco.
+
+## Deploy no AKS (produção)
+
+Pré-requisitos no Azure: AKS com OIDC issuer, Workload Identity e o addon
+`azure-keyvault-secrets-provider`; ACR anexado ao AKS (`--attach-acr`); Key Vault com os 12
+segredos; identidade `id-fcg-kv` com *Key Vault Secrets User* e credencial federada para
+`system:serviceaccount:fcg:fcg-sa`.
+
+```bash
+az aks get-credentials -g rg-fcg-tc4 -n aks-fcg-tc4 --overwrite-existing
+
+# 1. Namespace e segredos (Key Vault)
+kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -f k8s/03-keyvault-secrets.yaml
+
+# 2. Todo o restante (infra, APIs, Elasticsearch, Kong, observabilidade)
+kubectl apply -f k8s/
+kubectl get pods -n fcg -w
+```
+
+**Normal nos primeiros minutos:** pods de infraestrutura em `CreateContainerConfigError` até o
+`platform-secrets` nascer (ele é criado quando o primeiro pod de API monta o volume CSI) e APIs
+reiniciando até Postgres/RabbitMQ ficarem prontos — tudo se resolve sozinho. Os jobs
+`kong-migrations` e `kong-config` terminam como `Completed`.
+
+### Imagens e tags (quem é dono da tag)
+
+Os manifests `04`–`07` apontam para `acrfcgtc4b.azurecr.io/<serviço>:v1` (versão inicial).
+Para `users-api` e `catalog-api` **o pipeline é o dono da tag**: cada push na `main` publica
+`:<sha do commit>` e faz `kubectl set image`. Por isso, ao reaplicar `04`/`05` em produção,
+preserve a imagem em uso para não voltar à `v1`:
+
+```bash
+IMG=$(kubectl get deploy catalog-api -n fcg -o jsonpath='{.spec.template.spec.containers[0].image}')
+sed "s#acrfcgtc4b.azurecr.io/fcg-catalog-api:v1#${IMG}#" k8s/05-catalog-api.yaml | kubectl apply -f -
+```
+
+`payments-api` e `notifications-api` não têm pipeline e usam `:v1`.
+
+## CI/CD (GitHub Actions → ACR → AKS)
+
+Workflows em `fcg-users-api/.github/workflows/ci.yml` e `fcg-catalog-api/.github/workflows/ci.yml`:
+
+1. **build-and-test** — restore, build e testes automatizados (`dotnet test`).
+2. **Publicar no ACR e atualizar o AKS** (só na `main`):
+   - login no Azure por **OIDC** (identidade `id-fcg-github`, sem senha guardada no GitHub);
+   - build da imagem com tag = SHA do commit;
+   - **scan de vulnerabilidades (Trivy)**;
+   - push no ACR;
+   - `kubectl set image` + `rollout status` — **Rolling Update** (`maxUnavailable: 0`, `maxSurge: 1`), sem downtime;
+   - `rollout undo` automático se o rollout falhar.
+
+Configuração no GitHub (por repositório): Secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`; Variables `ACR_NAME`, `ACR_LOGIN_SERVER`, `AKS_RESOURCE_GROUP`,
+`AKS_CLUSTER_NAME`, `K8S_NAMESPACE`.
+
+> As credenciais federadas da `id-fcg-github` precisam casar com o *subject* que o GitHub envia.
+> Hoje ele inclui os IDs da organização e do repositório
+> (`repo:Fiap-Grupo-17@<org-id>/<repo>@<repo-id>:ref:refs/heads/main`); se o login falhar com
+> `AADSTS700213`, compare o subject do erro com
+> `az identity federated-credential list -g rg-fcg-tc4 --identity-name id-fcg-github -o table`.
+
+## API Gateway — Kong
+
+A plataforma utiliza o **Kong Gateway** (DB mode) como único ponto de entrada das APIs.
+
+- `k8s/10-kong-postgres.yaml` — banco PostgreSQL utilizado pelo Kong.
+- `k8s/11-kong-migrations.yaml` — migrations/bootstrap do banco do Kong.
+- `k8s/12-kong.yaml` — Deployment e Services do Kong (`kong-proxy-service` `LoadBalancer`; Admin API `ClusterIP`).
+- `k8s/13-kong-config.yaml` — Job que cria Services, Routes, plugin JWT e o consumer.
+
+### Rotas publicadas
+
+| Rota | Métodos | Caminho | JWT no Kong |
+|---|---|---|---|
+| `auth-route` | todos | `/api/auth` | não |
+| `users-registrar-route` | POST | `/api/usuarios/registrar` | não |
+| `users-route` | todos | `/api/usuarios` | **sim** |
+| `catalog-jogos-get-route` | GET | `/api/jogos` (inclui `/api/jogos/search`) | não |
+| `catalog-jogos-post-route` | POST, PUT, PATCH | `/api/jogos` (criar, editar, ativar/desativar) | **sim** (+ perfil Admin na API) |
+| `catalog-aquisicoes-route` | POST | `/api/biblioteca/aquisicoes` | **sim** |
+| `catalog-biblioteca-route` | GET | `/api/biblioteca` | **sim** |
+
+`/swagger`, `/health` e `/metrics` **não** são publicados no Kong (respondem 404 pelo gateway).
+
+### Testar pelo Kong
+
+```bash
+KONG=$(kubectl get svc kong-proxy-service -n fcg -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+curl -i http://$KONG/api/jogos                                         # público
+curl -i -H "Authorization: Bearer SEU_TOKEN_JWT" http://$KONG/api/usuarios   # protegido
+```
+
+Quando a requisição passa pelo Kong, a resposta traz cabeçalhos como `Via: kong/3.4.x`,
+`X-Kong-Proxy-Latency` e `X-Kong-Upstream-Latency` — eles separam erro de roteamento de erro
+interno da aplicação.
+
+### Administração do Kong
+
+A Admin API é interna (`ClusterIP`). Para consultar:
+
+```bash
+kubectl port-forward -n fcg svc/kong-admin-service 18001:8001
+curl http://localhost:18001/routes
+```
+
+> Não exiba `kubectl logs job/kong-config`: o log do job contém a credencial JWT do consumer.
+
+### Fluxo simplificado
+
+```text
+Swagger / Postman / curl
+          |
+          | http://<IP público do Kong>
+          v
+      Kong Gateway (valida JWT)
+          |
+          +----> users-api-service:80   ----> UsersAPI   ----> PostgreSQL
+          |
+          +----> catalog-api-service:80 ----> CatalogAPI ----> PostgreSQL · Redis · MongoDB · Elasticsearch
+```
+
+## Observabilidade
+
+Optamos pela **Opção A: stack de código aberto (Prometheus + Grafana)**.
+
+- `UsersAPI` e `CatalogAPI` foram instrumentadas com o pacote `prometheus-net.AspNetCore`,
+  expondo métricas HTTP no endpoint `/metrics` (interno).
+- O Prometheus (`k8s/08-prometheus.yaml`) faz scrape desses endpoints a cada 15s, configurado
+  via ConfigMap apontando para os Services internos (`users-api-service:80` e
+  `catalog-api-service:80`).
+- O Grafana (`k8s/09-grafana.yaml`) se conecta ao Prometheus (`http://prometheus:9090`) e já sobe
+  com o dashboard provisionado **"FCG - Observabilidade das APIs"**:
+
+| Painel | Query PromQL |
+|---|---|
+| Requisições/s por status | `sum by (code) (rate(http_requests_received_total[1m]))` |
+| Requisições/s por serviço | `sum by (job) (rate(http_requests_received_total[1m]))` |
+| Latência p95 por serviço | `histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket[5m])))` |
+| Taxa de erros 5xx por serviço | `sum by (job) (rate(http_requests_received_total{code=~"5.."}[1m]))` |
+
+**Acesso no AKS:** `http://<EXTERNAL-IP do Service grafana>` — usuário `admin`, senha no Key Vault
+(`grafana-admin-password`). Localmente: `kubectl port-forward svc/grafana 3000:80 -n fcg` (o Service escuta na 80).
 
 ## Executar localmente (todos os serviços)
 
@@ -87,6 +337,9 @@ docker compose logs -f
 docker compose ps
 ```
 
+> O Elasticsearch não faz parte deste compose; para testar a busca localmente use o
+> `docker-compose.yml` do `fcg-catalog-api`, que já inclui o serviço `elasticsearch`.
+
 ### Portas expostas
 
 | Serviço           | Porta local | Swagger                              |
@@ -100,9 +353,7 @@ docker compose ps
 | Redis             | 6379        | —                                    |
 | RabbitMQ AMQP     | 5672        | —                                    |
 | RabbitMQ Mgmt     | 15672       | http://localhost:15672 (guest/<RABBITMQ_PASSWORD>) |
-— 
 | Prometheus        | 9090        | http://localhost:9090                |
-— 
 | Grafana           | 3000        | http://localhost:3000 (admin/<GRAFANA_ADMIN_PASSWORD>) |
 
 ### Validar Redis e MongoDB
@@ -116,284 +367,60 @@ mongosh mongodb://localhost:27017 --eval "db.getSiblingDB('fcg_catalog').getColl
 mongosh mongodb://localhost:27017 --eval "db.getSiblingDB('fcg_payments').getCollectionNames()"
 mongosh mongodb://localhost:27017 --eval "db.getSiblingDB('fcg_notifications').getCollectionNames()"
 ```
-## Segredos
 
-O repositório é público, então **nenhuma credencial é versionada**.
+### Kubernetes local (kind/Docker Desktop)
 
-### AKS (TC4): Azure Key Vault + CSI Secret Store
-
-As credenciais de produção vivem **só** no Azure Key Vault `kv-fcg-tc4`. O cluster
-as busca em tempo de execução, sem senha nenhuma guardada:
-
-```text
-Key Vault kv-fcg-tc4 ──► driver CSI (addon do AKS) ──► Secret "platform-secrets" ──► Deployments
-        ▲                      │
-        └── identidade id-fcg-kv (Workload Identity, federada com a SA fcg:fcg-sa)
-```
-
-- `k8s/03-keyvault-secrets.yaml` cria a ServiceAccount `fcg-sa` e o
-  `SecretProviderClass` `fcg-keyvault`, que lista os 11 segredos do cofre e, via
-  `secretObjects`, **gera** o Secret `platform-secrets` com as mesmas chaves de
-  sempre (`Jwt__Secret`, `ConnectionStrings__Postgres`…). Os `secretKeyRef` dos
-  Deployments não mudam.
-- As 4 APIs montam o volume CSI em `/mnt/secrets-store`; o Secret existe enquanto
-  ao menos um pod montar o volume.
-- O arquivo só contém identificadores (tenant, client ID da identidade, nome do
-  cofre), que não dão acesso a nada sozinhos.
-- Prova de origem: `kubectl get secret platform-secrets -n fcg --show-labels`
-  mostra `secrets-store.csi.k8s.io/managed=true`.
-- Para trocar um valor: grave uma nova versão no cofre e reinicie os pods que o usam
-  (`kubectl rollout restart deploy/<api> -n fcg`).
-
-### Ambiente local (kind/Docker Desktop)
-
-O modelo com placeholders fica **fora** de `k8s/` (em `exemplos/`), para que um
-`kubectl apply -f k8s/` nunca aplique placeholders por cima do Secret real. O
-arquivo real `k8s/03-secrets.yaml` está no `.gitignore`.
-
-> ⚠️ Nesta branch, `k8s/` está adaptado ao AKS (ACR, `managed-csi`, Key Vault).
-> Fora do Azure o `03-keyvault-secrets.yaml` e o volume CSI das APIs não funcionam.
-
-```
-Copy-Item exemplos\03-secrets.example.yaml k8s\03-secrets.yaml
-# edite k8s/03-secrets.yaml e troque cada <placeholder> por um valor seu
-kubectl apply -f k8s/03-secrets.yaml
-```
-
-> Se o Postgres local já foi criado com outra senha, mantenha o seu arquivo atual:
-> o Postgres só lê a senha na primeira criação do banco.
-
-## Deploy no Kubernetes
+Com o Secret local criado (ver [Ambiente local](#ambiente-local-kinddocker-desktop)), aplique a
+infraestrutura antes das APIs para evitar `CrashLoopBackOff` na primeira tentativa de conexão
+(elas se recuperam sozinhas, mas isso agiliza o start):
 
 ```bash
-# 1. Namespace e segredos primeiro
 kubectl apply -f k8s/00-namespace.yaml
 kubectl apply -f k8s/03-secrets.yaml
-
-# 2. Infraestrutura (Postgres, RabbitMQ, Redis, Mongo) — aplicar antes das APIs
-#    para evitar que os pods das APIs fiquem em CrashLoopBackOff na primeira
-#    tentativa de conexão (eles se recuperam sozinhos, mas isso agiliza o start)
-kubectl apply -f k8s/01-postgres.yaml
-kubectl apply -f k8s/02-rabbitmq.yaml
-kubectl apply -f k8s/08-redis.yaml
-kubectl apply -f k8s/09-mongo.yaml
-
-# 3. Microsserviços
-kubectl apply -f k8s/04-users-api.yaml
-kubectl apply -f k8s/05-catalog-api.yaml
-kubectl apply -f k8s/06-payments-api.yaml
-kubectl apply -f k8s/07-notifications-api.yaml
-kubectl apply -f k8s/08-prometheus.yaml
-kubectl apply -f k8s/09-grafana.yaml
-
-# 4. Verificar pods
+kubectl apply -f k8s/01-postgres.yaml -f k8s/02-rabbitmq.yaml -f k8s/08-redis.yaml -f k8s/09-mongo.yaml
+kubectl apply -f k8s/04-users-api.yaml -f k8s/05-catalog-api.yaml -f k8s/06-payments-api.yaml -f k8s/07-notifications-api.yaml
+kubectl apply -f k8s/08-prometheus.yaml -f k8s/09-grafana.yaml
+kubectl apply -f k8s/10-kong-postgres.yaml -f k8s/11-kong-migrations.yaml -f k8s/12-kong.yaml -f k8s/13-kong-config.yaml
 kubectl get pods -n fcg
-
-# 5. Acessar serviços (NodePort)
-# UsersAPI:   http://localhost:30081/swagger
-# CatalogAPI: http://localhost:30082/swagger
 ```
-# 3. Acessar serviços
-# Em clusters criados via kind (como o do Docker Desktop mais recente), o NodePort
-# não fica acessível diretamente em localhost. Use kubectl port-forward:
-kubectl port-forward -n fcg svc/rabbitmq-service 5672:5672 &
-kubectl port-forward -n fcg svc/mongo-service    27017:27017 &
-kubectl port-forward -n fcg svc/redis-service 6379:6379 &
-kubectl port-forward -n fcg svc/grafana    3000:3000 &
-kubectl port-forward -n fcg svc/prometheus 9090:9090 &
+
+Em clusters kind o `LoadBalancer`/NodePort nem sempre fica acessível em `localhost`; use port-forward:
+
+```bash
 kubectl port-forward -n fcg svc/kong-proxy-service 8000:80 &
-kubectl port-forward -n fcg svc/kong-admin-service 8001:8001 &
-kubectl port-forward -n fcg deploy/kong 8002:8002 &
 kubectl port-forward -n fcg svc/users-api-service   8081:80 &
 kubectl port-forward -n fcg svc/catalog-api-service 8082:80 &
-
-# UsersAPI:   http://localhost:8081/swagger
-# CatalogAPI: http://localhost:8082/swagger
-# Prometheus: http://localhost:9090
-# Grafana:    http://localhost:3000 (admin/<GRAFANA_ADMIN_PASSWORD>)
-# Kong:       http://localhost:8002/
+kubectl port-forward -n fcg svc/grafana    3000:80 &
+kubectl port-forward -n fcg svc/prometheus 9090:9090 &
+# Kong (gateway): http://localhost:8000 · UsersAPI: http://localhost:8081/swagger · CatalogAPI: http://localhost:8082/swagger
+```
 
 > Os arquivos `08-redis.yaml` e `09-mongo.yaml` mantêm a numeração alta (após as
 > APIs) por terem sido adicionados posteriormente à convenção original de
-> prefixos, mas devem ser aplicados **antes** dos manifests `04`–`07` conforme a
-> ordem acima.
+> prefixos, mas devem ser aplicados **antes** dos manifests `04`–`07`.
 
-### ⚠️ Antes de aplicar em produção
+## Limitações conhecidas
 
-1. **Altere o `Jwt__Secret`** em `k8s/03-secrets.yaml` (mínimo 32 caracteres aleatórios)
-2. **Altere as senhas** do PostgreSQL e RabbitMQ
-3. **Build e push** das imagens para um registry (ex: Docker Hub, ECR, GCR):
-   ```bash
-   docker build -t seu-registry/fcg-users-api:1.0.0 ../fcg-users-api
-   docker push seu-registry/fcg-users-api:1.0.0
-   # ... repita para os demais serviços
-   ```
-4. **Atualize** `image:` nos arquivos `04` a `07` com o caminho do registry
-5. Considere usar **Kubernetes Secrets** gerenciados (Vault, AWS Secrets Manager)
-
-## API Gateway — Kong no Kubernetes
-
-A plataforma utiliza o **Kong Gateway** como ponto de entrada para as APIs no ambiente Kubernetes.
-Os manifests foram separados para manter a implantação organizada:
-
-- `k8s/10-kong-postgres.yaml` — banco PostgreSQL utilizado pelo Kong.
-- `k8s/11-kong-migrations.yaml` — migrations/bootstrap do banco do Kong.
-- `k8s/12-kong.yaml` — Deployment e Services do Kong.
-- `k8s/13-kong-config.yaml` — configuração dos Services e Routes do gateway.
-
-### Subir o Kong
-
-```bash
-kubectl apply -f k8s/10-kong-postgres.yaml
-kubectl apply -f k8s/11-kong-migrations.yaml
-kubectl get jobs -n fcg
-kubectl apply -f k8s/12-kong.yaml
-kubectl apply -f k8s/13-kong-config.yaml
-
-# Conferir o ambiente
-kubectl get pods -n fcg
-kubectl get svc -n fcg
-```
-
-O resultado esperado é ter `kong`, `kong-database`, `users-api` e `catalog-api` em `Running` (o Job `kong-migrations` fica como `Completed`).
-
-### Portas usadas no Kubernetes local
-
-| Componente | Acesso | Finalidade |
-|---|---|---|
-| Kong Proxy | `http://localhost:30080` | Entrada das requisições que devem passar pelo API Gateway |
-| UsersAPI | `http://localhost:30081` | NodePort direto da UsersAPI |
-| CatalogAPI | `http://localhost:30082` | NodePort direto da CatalogAPI |
-| Kong Admin API | porta `8001` via `port-forward` | Administração e conferência de Services/Routes |
-
-> Para validar o funcionamento do **API Gateway**, utilize a porta **8000**. As portas 30081 e 30082 acessam diretamente as APIs e, portanto, não demonstram a passagem pelo Kong.
-
-### Swagger das APIs no Kubernetes
-
-Acesso direto aos Swagger para autenticação e testes:
-
-```text
-UsersAPI:   http://localhost:30081/swagger/index.html
-CatalogAPI: http://localhost:30082/swagger/index.html
-```
-
-Na UsersAPI é possível autenticar o usuário administrador, obter o JWT pelo endpoint de autenticação e utilizar **Authorize / Bearer Token** para testar endpoints protegidos.
-
-### Testar as APIs através do Kong
-
-Exemplos pelo proxy do Kong:
-
-```bash
-# UsersAPI — endpoint protegido
-curl -i -H "Authorization: Bearer SEU_TOKEN_JWT" http://localhost:30080/api/usuarios
-
-# CatalogAPI
-curl -i http://localhost:30080/api/jogos
-```
-
-Quando a requisição passa pelo Kong, a resposta pode apresentar cabeçalhos como:
-
-```text
-Via: kong/3.4.2
-X-Kong-Proxy-Latency: ...
-X-Kong-Upstream-Latency: ...
-```
-
-Esses cabeçalhos ajudam a demonstrar o fluxo **Cliente → Kong → Service Kubernetes → API**. Um erro retornado pela própria API (por exemplo, HTTP 500) ainda pode ter passado corretamente pelo Kong; nesse caso, os cabeçalhos do gateway ajudam a separar erro de roteamento de erro interno da aplicação.
-
-### Administração do Kong
-
-A Admin API é interna (`ClusterIP`). Para acessá-la localmente, use uma porta livre no computador:
-
-```bash
-kubectl port-forward -n fcg svc/kong-admin-service 18001:8001
-```
-
-Em outro terminal:
-
-```bash
-curl http://localhost:18001/services
-curl http://localhost:18001/routes
-```
-
-Isso permite conferir se os Services `users-api` e `catalog-api` e suas respectivas Routes foram carregados no Kong. Se a porta local `8001` já estiver ocupada, mantenha `18001:8001` para evitar conflito.
-
-### Fluxo simplificado
-
-```text
-Swagger / Postman / curl
-          |
-          | http://localhost:30080
-          v
-      Kong Gateway
-          |
-          +----> users-api-service:80   ----> UsersAPI
-          |
-          +----> catalog-api-service:80 ----> CatalogAPI
-                         |
-                         v
-                     PostgreSQL
-```
-
-
-## Observabilidade
-
-Optamos pela **Opção A: stack de código aberto (Prometheus + Grafana)**.
-
-### Como funciona
-
-- `UsersAPI` e `CatalogAPI` foram instrumentadas com o pacote `prometheus-net.AspNetCore`,
-  expondo métricas HTTP automaticamente no endpoint `/metrics`.
-- O Prometheus (`k8s/08-prometheus.yaml`) faz scrape desses endpoints a cada 15s, configurado
-  via ConfigMap apontando para os Services internos (`users-api-service:80` e
-  `catalog-api-service:80`).
-- O Grafana (`k8s/09-grafana.yaml`) se conecta ao Prometheus (`http://prometheus:9090`,
-  nome do Service interno) como fonte de dados.
-
-### Dashboard
-
-O dashboard "FCG — Observabilidade" contém 3 painéis:
-
-| Painel | Query PromQL |
-|---|---|
-| Latência (p95) | `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job))` |
-| Requisições por status code | `sum(rate(http_requests_received_total[5m])) by (job, code)` |
-| Taxa de Erro % | `(sum(rate(http_requests_received_total{code=~"[45].."}[5m])) or vector(0)) / sum(rate(http_requests_received_total[5m])) * 100` |
-
-### Subir a stack
-
-```bash
-kubectl apply -f k8s/08-prometheus.yaml
-kubectl apply -f k8s/09-grafana.yaml
-```
-
-### Acessar
-
-```bash
-kubectl port-forward svc/prometheus 9090:9090 -n fcg
-kubectl port-forward svc/grafana 3000:3000 -n fcg
-```
-
-- Prometheus: http://localhost:9090 (verificar em Status > Targets se `users-api` e
-  `catalog-api` aparecem como UP)
-- Grafana: http://localhost:3000 — usuário `admin`, senha `<GRAFANA_ADMIN_PASSWORD>`
+- O RabbitMQ usa o usuário `guest`; o hash da senha está no ConfigMap do `k8s/02-rabbitmq.yaml`
+  (a senha em si vem do Key Vault). Próximo passo: usuário dedicado com definições geradas a partir do cofre.
+- Os endereços públicos são IPs dinâmicos, sem DNS fixo nem TLS no gateway.
 
 ## Repositórios
 
-| Repositório                 | Descrição                                     |
-|------------------------     |-----------------------------------------------|
-| `fcg-contracts`             | NuGet de contratos de eventos compartilhados  |
-| `fcg-users-api`             | Autenticação, cadastro, JWT                   |
-| `fcg-catalog-api`           | Catálogo de jogos + Biblioteca                |
-| `fcg-payments-api`          | Processamento de pagamentos (event-driven)    |
-| `fcg-notifications-api`.    | Notificações por e-mail (simulado)            |
-| `fcg-notifications-function`| Notificações por e-mail SERVERLESS (simulado)            |
-| `fcg-orchestration`    | Este repositório — compose + k8s              |
+| Repositório                  | Descrição                                               |
+|------------------------------|---------------------------------------------------------|
+| `fcg-contracts`              | NuGet de contratos de eventos compartilhados            |
+| `fcg-users-api`              | Autenticação, cadastro, JWT (com pipeline CI/CD)        |
+| `fcg-catalog-api`            | Catálogo, biblioteca, busca avançada (com pipeline CI/CD) |
+| `fcg-payments-api`           | Processamento de pagamentos (event-driven)              |
+| `fcg-notifications-api`      | Notificações por e-mail (simulado)                      |
+| `fcg-notifications-function` | Notificações por e-mail SERVERLESS (simulado)           |
+| `fcg-orchestration`          | Este repositório — compose + k8s                        |
 
+## Material de apoio
 
-## Para material de apoio, leia e siga o passo a passo dos documentos abaixo:
-- ordem_execucao_comandos.md | Ordem exata dos comandos para subir o ambiente COMPLETO
-- ROTEIRO_TESTE_E2E_HIBRIDO.md | Roteiro para subida de ambiente e usabilidade da aplicação 
+- `ordem_execucao_comandos.md` — ordem exata dos comandos para subir o ambiente completo
+- `ROTEIRO_TESTE_E2E_HIBRIDO.md` — roteiro de subida do ambiente e usabilidade da aplicação
 
 ## Grupo 17 — Pos-Tech FIAP
 - Letícia Lopes Ribeiro Vasconcelos
