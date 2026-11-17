@@ -136,17 +136,19 @@ spec:
 
 
               # -----------------------------------------------------
-              # POST /api/jogos
-              # PROTEGIDO
+              # POST / PUT / PATCH /api/jogos  (criar, editar, ativar/desativar)
+              # PROTEGIDO JWT no Kong + perfil Admin validado na API
               # -----------------------------------------------------
 
-              echo "Criando rota protegida POST /api/jogos..."
+              echo "Criando rota protegida POST/PUT/PATCH /api/jogos..."
 
               curl -s -X POST \
                 http://kong-admin-service:8001/services/catalog-api/routes \
                 --data name=catalog-jogos-post-route \
                 --data paths[]=/api/jogos \
                 --data methods[]=POST \
+                --data methods[]=PUT \
+                --data methods[]=PATCH \
                 --data strip_path=false
 
 
